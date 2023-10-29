@@ -6,8 +6,6 @@
 #include <sys/mman.h>
 #include <vector>
 
-namespace runtime {
-
 struct Instruction {
     enum class Type {
         Add,
@@ -50,9 +48,9 @@ struct VM {
 };
 
 struct Block {
-    std::vector<Instruction> instructions;
-    template <typename T> void append(T &&insn) {
-        instructions.push_back(insn);
+    std::vector<std::unique_ptr<Instruction>> instructions;
+    template <typename T> void append(T &insn) {
+        instructions.push_back(std::make_unique(insn));
     }
 };
 
@@ -60,11 +58,73 @@ struct Program {
     std::vector<Block> blocks;
 };
 
-struct Emitter {};
+namespace JIT {
+
+enum class Register {
+    EAX = 0b000,
+};
+
+struct Imm32 {
+    static const size_t length = 4;
+    unsigned int value{0};
+    explicit Imm32(unsigned int val) : value(val) {
+        bytes.resize(length);
+        for (int i = 0; i < length; i++) {
+            bytes[i] = val & 0xff;
+            val >>= 8;
+        }
+    }
+
+    const std::vector<char> &get_bytes() { return bytes; }
+
+  private:
+    std::vector<char> bytes;
+};
+
+struct Imm64 {
+    static const size_t length = 8;
+    unsigned int value{0};
+    explicit Imm64(unsigned int val) : value(val) {
+        bytes.resize(length);
+        for (int i = 0; i < length; i++) {
+            bytes[i] = val & 0xff;
+            val >>= 8;
+        }
+    }
+
+    const std::vector<char> &get_bytes() { return bytes; }
+
+  private:
+    std::vector<char> bytes;
+};
+
+struct Emitter {
+    void ret() { buffer.emplace_back(0xC3); }
+    void mov(Register reg, Imm32 value) {
+        buffer.push_back(0xB8 | (int)reg);
+        auto imm = value.get_bytes();
+        buffer.insert(buffer.end(), imm.begin(), imm.end());
+    }
+    void movabs(Register reg, Imm64 value) {
+        buffer.push_back(0x48);
+        buffer.push_back(0xB8 | (int)reg);
+        auto imm = value.get_bytes();
+        buffer.insert(buffer.end(), imm.begin(), imm.end());
+    }
+    void add(Register reg, Imm32 value) {
+        buffer.push_back(0x05);
+        auto imm = value.get_bytes();
+        buffer.insert(buffer.end(), imm.begin(), imm.end());
+    }
+
+    const std::vector<char> &get() { return buffer; }
+
+  private:
+    std::vector<char> buffer;
+};
 
 struct JIT {};
-
-}; // namespace runtime
+}; // namespace JIT
 
 void *allocate_function(std::size_t size) {
     void *fn_memory = mmap(0, size, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -73,10 +133,16 @@ void *allocate_function(std::size_t size) {
 }
 
 void write_function(void *fn_memory) {
-    // FIXME: This is hardcoded for now
-    unsigned char opcodes[] = {0x48, 0xB8, 0xF0, 0xDE, 0xBC, 0x9A,
-                               0x78, 0x56, 0x34, 0x12, 0xC3};
-    memcpy(fn_memory, opcodes, 11);
+    JIT::Emitter emitter;
+    emitter.mov(JIT::Register::EAX, JIT::Imm32(69));
+    emitter.add(JIT::Register::EAX, JIT::Imm32(351));
+    emitter.ret();
+    std::vector<char> code = emitter.get();
+    for (auto c : code) {
+        printf("%x ", c & 0xff);
+    }
+    puts("");
+    memcpy(fn_memory, code.data(), code.size());
 }
 
 typedef unsigned long long (*FnPointer)();
@@ -89,7 +155,7 @@ FnPointer build_function() {
 
 int main() {
     FnPointer fn = build_function();
-    unsigned long long x = fn();
-    printf("%llx\n", x);
+    int x = fn();
+    printf("%d\n", x);
     return 0;
 }

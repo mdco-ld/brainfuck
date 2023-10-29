@@ -51,6 +51,9 @@ struct VM {
 
 struct Block {
     std::vector<Instruction> instructions;
+    template <typename T> void append(T &&insn) {
+        instructions.push_back(insn);
+    }
 };
 
 struct Program {
@@ -69,13 +72,23 @@ void *allocate_function(std::size_t size) {
     return fn_memory;
 }
 
-int main() {
-    void *fn_memory = allocate_function(128);
+void write_function(void *fn_memory) {
+    // FIXME: This is hardcoded for now
     unsigned char opcodes[] = {0x48, 0xB8, 0xF0, 0xDE, 0xBC, 0x9A,
                                0x78, 0x56, 0x34, 0x12, 0xC3};
     memcpy(fn_memory, opcodes, 11);
-    void *fn_pointer = fn_memory;
-    unsigned long long (*fn)() = (unsigned long long (*)())fn_pointer;
+}
+
+typedef unsigned long long (*FnPointer)();
+
+FnPointer build_function() {
+    void *fn = allocate_function(128);
+    write_function(fn);
+    return (FnPointer)fn;
+}
+
+int main() {
+    FnPointer fn = build_function();
     unsigned long long x = fn();
     printf("%llx\n", x);
     return 0;

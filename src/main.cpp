@@ -1,6 +1,67 @@
 #include <cstdio>
+#include <iostream>
+#include <memory>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <vector>
+
+namespace runtime {
+
+struct Instruction {
+    enum class Type {
+        Add,
+        Sub,
+        Right,
+        Left,
+        Loop,
+        EndLoop,
+    };
+    Type type;
+};
+
+struct AddInsn : public Instruction {
+    AddInsn() { type = Type::Add; }
+};
+
+struct SubInsn : public Instruction {
+    SubInsn() { type = Type::Sub; }
+};
+
+struct RightInsn : public Instruction {
+    RightInsn() { type = Type::Right; }
+};
+
+struct LeftInsn : public Instruction {
+    LeftInsn() { type = Type::Left; }
+};
+
+struct LoopInsn : public Instruction {
+    LoopInsn() { type = Type::Loop; }
+};
+
+struct EndLoopInsn : public Instruction {
+    EndLoopInsn() { type = Type::EndLoop; }
+};
+
+struct VM {
+    std::unique_ptr<char[50000]> memory;
+    std::size_t pointer{0};
+};
+
+struct Block {
+    std::vector<Instruction> instructions;
+};
+
+struct Program {
+    std::vector<Block> blocks;
+};
+
+struct Emitter {};
+
+struct JIT {};
+
+}; // namespace runtime
 
 void *allocate_function(std::size_t size) {
     void *fn_memory = mmap(0, size, PROT_READ | PROT_WRITE | PROT_EXEC,

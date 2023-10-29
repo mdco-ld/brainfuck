@@ -60,8 +60,16 @@ struct Program {
 
 namespace JIT {
 
-enum class Register {
+enum class Register32 {
     EAX = 0b000,
+    EBX = 0b011,
+    ECX = 0b001,
+};
+
+enum class Register64 {
+    RAX = 0b000,
+    RBX = 0b011,
+    RCX = 0b001,
 };
 
 struct Imm32 {
@@ -100,21 +108,25 @@ struct Imm64 {
 
 struct Emitter {
     void ret() { buffer.emplace_back(0xC3); }
-    void mov(Register reg, Imm32 value) {
-        buffer.push_back(0xB8 | (int)reg);
-        auto imm = value.get_bytes();
+    void mov(Register32 dst, Imm32 src) {
+        buffer.push_back(0xB8 | (int)dst);
+        auto imm = src.get_bytes();
         buffer.insert(buffer.end(), imm.begin(), imm.end());
     }
-    void movabs(Register reg, Imm64 value) {
+    void movabs(Register64 dst, Imm64 src) {
         buffer.push_back(0x48);
-        buffer.push_back(0xB8 | (int)reg);
-        auto imm = value.get_bytes();
+        buffer.push_back(0xB8 | (int)dst);
+        auto imm = src.get_bytes();
         buffer.insert(buffer.end(), imm.begin(), imm.end());
     }
-    void add(Register reg, Imm32 value) {
+    void add(Register32 dst, Imm32 src) {
         buffer.push_back(0x05);
-        auto imm = value.get_bytes();
+        auto imm = src.get_bytes();
         buffer.insert(buffer.end(), imm.begin(), imm.end());
+    }
+    void add(Register32 dst, Register32 src) {
+        buffer.push_back(0x01);
+        buffer.push_back(0xc0 | ((int)src) << 3 | (int)dst);
     }
 
     const std::vector<char> &get() { return buffer; }
@@ -124,6 +136,7 @@ struct Emitter {
 };
 
 struct JIT {};
+
 }; // namespace JIT
 
 void *allocate_function(std::size_t size) {
@@ -134,12 +147,13 @@ void *allocate_function(std::size_t size) {
 
 void write_function(void *fn_memory) {
     JIT::Emitter emitter;
-    emitter.mov(JIT::Register::EAX, JIT::Imm32(69));
-    emitter.add(JIT::Register::EAX, JIT::Imm32(351));
+    emitter.mov(JIT::Register32::EAX, JIT::Imm32(69));
+    emitter.mov(JIT::Register32::ECX, JIT::Imm32(351));
+    emitter.add(JIT::Register32::EAX, JIT::Register32::ECX);
     emitter.ret();
     std::vector<char> code = emitter.get();
     for (auto c : code) {
-        printf("%x ", c & 0xff);
+        printf("%02x ", c & 0xff);
     }
     puts("");
     memcpy(fn_memory, code.data(), code.size());

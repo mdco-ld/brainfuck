@@ -1,3 +1,3 @@
 # brainfuck
 
-This is a brainfuck implementation.
+This is a prototype of a brainfuck interpreter with a jit compiler.

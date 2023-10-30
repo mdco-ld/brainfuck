@@ -323,9 +323,13 @@ struct Compiler {
         emitter.mov(Register64::RCX, Register64::RBX);
     }
     void compile_read(ReadInsn insn, Emitter &emitter) {
-        // TODO: Implement this.
-        std::cerr << "Read is not implemented yet :(\n";
-        exit(0);
+        emitter.mov(Register64::RAX, Imm64(0));
+        emitter.mov(Register64::RDI, Imm64(0));
+        emitter.mov(Register64::RSI, Register64::RCX);
+        emitter.mov(Register64::RDX, Imm64(1));
+        emitter.mov(Register64::RBX, Register64::RCX);
+        emitter.syscall();
+        emitter.mov(Register64::RCX, Register64::RBX);
     }
     void compile_loop(int offset, Emitter &emitter) {
         emitter.mov_deref(Register8::AL, Register64::RCX);

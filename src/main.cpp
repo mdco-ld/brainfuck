@@ -3,6 +3,7 @@
 #include <memory>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <sys/mman.h>
 #include <vector>
 
@@ -31,11 +32,13 @@ struct SubInsn : public Instruction {
 };
 
 struct RightInsn : public Instruction {
-    RightInsn() { type = Type::Right; }
+    RightInsn(int val) : value(val) { type = Type::Right; }
+    int value{0};
 };
 
 struct LeftInsn : public Instruction {
-    LeftInsn() { type = Type::Left; }
+    LeftInsn(int val) : value(val) { type = Type::Left; }
+    int value{0};
 };
 
 struct LoopInsn : public Instruction {
@@ -54,20 +57,11 @@ struct ReadInsn : public Instruction {
     ReadInsn() { type = Type::Read; }
 };
 
-struct VM {
-    std::unique_ptr<char[50000]> memory;
-    std::size_t pointer{0};
-};
-
-struct Block {
-    std::vector<std::unique_ptr<Instruction>> instructions;
-    template <typename T> void append(T &insn) {
-        instructions.push_back(std::make_unique(insn));
-    }
-};
-
 struct Program {
-    std::vector<Block> blocks;
+    std::vector<std::unique_ptr<Instruction>> instructions;
+    template <typename T> void append(T &&insn) {
+        instructions.push_back(std::make_unique<T>(insn));
+    }
 };
 
 namespace JIT {
@@ -264,10 +258,10 @@ struct Compiler {
         emitter.deref_mov(Register64::RCX, Register8::AL);
     }
     void compile_right(RightInsn insn, Emitter &emitter) {
-        emitter.add(Register64::RCX, Imm32(1));
+        emitter.add(Register64::RCX, Imm32(insn.value));
     }
     void compile_left(LeftInsn insn, Emitter &emitter) {
-        emitter.sub(Register64::RCX, Imm32(1));
+        emitter.sub(Register64::RCX, Imm32(insn.value));
     }
     void compile_write(WriteInsn insn, Emitter &emitter) {
         emitter.mov(Register64::RAX, Imm64(1));
@@ -278,9 +272,96 @@ struct Compiler {
         emitter.syscall();
         emitter.mov(Register64::RCX, Register64::RBX);
     }
+    void compile_read(ReadInsn insn, Emitter &emitter) {
+        // TODO: Implement this.
+    }
 };
 
 }; // namespace JIT
+
+struct Compiler {
+    Compiler() {}
+
+    Program compile_program(std::string code) {
+        Program program;
+        for (int i = 0; i < code.length(); i++) {
+            if (is_add_or_sub(code, i)) {
+                int total = 0;
+                while (is_add_or_sub(code, i)) {
+                    if (code[i] == '+') {
+                        total++;
+                    } else {
+                        total--;
+                    }
+                    i++;
+                }
+
+                // This is necessary to keep the increment in the for loop valid
+                i--;
+
+                if (total == 0) {
+                    continue;
+                }
+                if (total > 0) {
+                    program.append(AddInsn(total));
+                } else {
+                    program.append(SubInsn(-total));
+                }
+                continue;
+            }
+            if (is_shift(code, i)) {
+                int total = 0;
+                while (is_shift(code, i)) {
+                    if (code[i] == '<') {
+                        total--;
+                    } else {
+                        total++;
+                    }
+                    i++;
+                }
+
+                // This is necessary to keep the increment in the for loop valid
+                i--;
+
+                if (total == 0) {
+                    continue;
+                }
+                if (total > 0) {
+                    program.append(RightInsn(total));
+                } else {
+                    program.append(LeftInsn(-total));
+                }
+                continue;
+            }
+            if (code[i] == '.') {
+                program.append(WriteInsn());
+                continue;
+            }
+            if (code[i] == ',') {
+                program.append(ReadInsn());
+                continue;
+            }
+            if (code[i] == '[') {
+                program.append(LoopInsn());
+                continue;
+            }
+            if (code[i] == ']') {
+                program.append(EndLoopInsn());
+                continue;
+            }
+        }
+        return program;
+    }
+
+  private:
+    bool is_add_or_sub(std::string &code, int pos) {
+        return pos < code.length() && (code[pos] == '-' || code[pos] == '+');
+    }
+    bool is_shift(std::string &code, int pos) {
+        return pos < code.length() && (code[pos] == '<' || code[pos] == '>');
+    }
+    std::vector<JIT::Emitter> emitters;
+};
 
 void *allocate_function(std::size_t size) {
     void *fn_memory = mmap(0, size, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -296,17 +377,19 @@ void write_function(void *fn_memory) {
 
     compiler.compile_add(AddInsn(0x41), emitter);
     compiler.compile_write(WriteInsn(), emitter);
-    compiler.compile_right(RightInsn(), emitter);
+    compiler.compile_right(RightInsn(1), emitter);
     compiler.compile_add(AddInsn(10), emitter);
     compiler.compile_write(WriteInsn(), emitter);
 
     compiler.compile_cleanup(emitter);
 
     std::vector<char> code = emitter.get();
+#if defined(DEBUG_INTRUCTIONS)
     for (auto c : code) {
         printf("%02x ", c & 0xff);
     }
     puts("");
+#endif
     memcpy(fn_memory, code.data(), code.size());
 }
 

@@ -60,6 +60,12 @@ struct Program {
 
 namespace JIT {
 
+enum class Register8 {
+    AX = 0b000,
+    BX = 0b011,
+    CX = 0b001,
+};
+
 enum class Register32 {
     EAX = 0b000,
     EBX = 0b011,
@@ -126,7 +132,23 @@ struct Emitter {
     }
     void add(Register32 dst, Register32 src) {
         buffer.push_back(0x01);
-        buffer.push_back(0xc0 | ((int)src) << 3 | (int)dst);
+        buffer.push_back(0xC0 | ((int)src) << 3 | (int)dst);
+    }
+    void cmp(Register32 dst, Imm32 src) {
+        buffer.push_back(0x3D);
+        auto arg = src.get_bytes();
+        buffer.insert(buffer.end(), arg.begin(), arg.end());
+    }
+    void jmp(Imm32 offset) {
+        buffer.push_back(0xE9);
+        auto arg = offset.get_bytes();
+        buffer.insert(buffer.end(), arg.begin(), arg.end());
+    }
+    void jz(Imm32 offset) {
+        buffer.push_back(0x0F);
+        buffer.push_back(0x84);
+        auto arg = offset.get_bytes();
+        buffer.insert(buffer.end(), arg.begin(), arg.end());
     }
 
     const std::vector<char> &get() { return buffer; }
@@ -147,9 +169,12 @@ void *allocate_function(std::size_t size) {
 
 void write_function(void *fn_memory) {
     JIT::Emitter emitter;
+    emitter.mov(JIT::Register32::EAX, JIT::Imm32(5));
+    emitter.cmp(JIT::Register32::EAX, JIT::Imm32(3));
+    emitter.jz(JIT::Imm32(6));
     emitter.mov(JIT::Register32::EAX, JIT::Imm32(69));
-    emitter.mov(JIT::Register32::ECX, JIT::Imm32(351));
-    emitter.add(JIT::Register32::EAX, JIT::Register32::ECX);
+    emitter.ret();
+    emitter.mov(JIT::Register32::EAX, JIT::Imm32(420));
     emitter.ret();
     std::vector<char> code = emitter.get();
     for (auto c : code) {
@@ -162,7 +187,7 @@ void write_function(void *fn_memory) {
 typedef unsigned long long (*FnPointer)();
 
 FnPointer build_function() {
-    void *fn = allocate_function(128);
+    void *fn = allocate_function(256);
     write_function(fn);
     return (FnPointer)fn;
 }

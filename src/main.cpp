@@ -22,50 +22,80 @@ struct Instruction {
         Read,
     };
     Type type;
+    virtual void print() = 0;
 };
 
 struct AddInsn : public Instruction {
     AddInsn(int val) : value(val) { type = Type::Add; }
     int value{0};
+    void print() override { std::cerr << "Add(" << value << ")\n"; }
 };
 
 struct SubInsn : public Instruction {
     SubInsn(int val) : value(val) { type = Type::Sub; }
     int value{0};
+    void print() override { std::cerr << "Sub(" << value << ")\n"; }
 };
 
 struct RightInsn : public Instruction {
     RightInsn(int val) : value(val) { type = Type::Right; }
     int value{0};
+    void print() override { std::cerr << "Right(" << value << ")\n"; }
 };
 
 struct LeftInsn : public Instruction {
     LeftInsn(int val) : value(val) { type = Type::Left; }
     int value{0};
+    void print() override { std::cerr << "Left(" << value << ")\n"; }
 };
 
 struct LoopInsn : public Instruction {
     LoopInsn() { type = Type::Loop; }
-    int offset{0};
+    int destination{0};
+    void print() override { std::cerr << "Loop(" << destination << ")\n"; }
 };
 
 struct EndLoopInsn : public Instruction {
     EndLoopInsn() { type = Type::EndLoop; }
-    int offset{0};
+    int destination{0};
+    void print() override { std::cerr << "EndLoop(" << destination << ")\n"; }
 };
 
 struct WriteInsn : public Instruction {
     WriteInsn() { type = Type::Write; }
+    void print() override { std::cerr << "Write\n"; }
 };
 
 struct ReadInsn : public Instruction {
     ReadInsn() { type = Type::Read; }
+    void print() override { std::cerr << "Read\n"; }
 };
 
-struct Program {
+struct Block {
     std::vector<std::unique_ptr<Instruction>> instructions;
     template <typename T> void append(T &&insn) {
         instructions.push_back(std::make_unique<T>(insn));
+    }
+    void print() {
+        for (auto &insn : instructions) {
+            insn->print();
+        }
+    }
+};
+
+struct Program {
+    std::vector<std::unique_ptr<Block>> blocks;
+    void append_new_block() { blocks.push_back(std::make_unique<Block>()); }
+    template <typename T> void append_insn(T &&insn) {
+        blocks.back()->append(std::move(insn));
+    }
+    void print() {
+        int idx = 0;
+        for (auto &block : blocks) {
+            std::cerr << "Block " << idx << "\n";
+            block->print();
+            idx++;
+        }
     }
 };
 
@@ -216,7 +246,13 @@ struct Emitter {
         buffer.insert(buffer.end(), arg.begin(), arg.end());
     }
     void cmp(Register32 dst, Imm32 src) {
+        // FIXME: This only compares with EAX
         buffer.push_back(0x3D);
+        auto arg = src.get_bytes();
+        buffer.insert(buffer.end(), arg.begin(), arg.end());
+    }
+    void cmp_al(Imm8 src) {
+        buffer.push_back(0x3C);
         auto arg = src.get_bytes();
         buffer.insert(buffer.end(), arg.begin(), arg.end());
     }
@@ -228,6 +264,12 @@ struct Emitter {
     void jz(Imm32 offset) {
         buffer.push_back(0x0F);
         buffer.push_back(0x84);
+        auto arg = offset.get_bytes();
+        buffer.insert(buffer.end(), arg.begin(), arg.end());
+    }
+    void jnz(Imm32 offset) {
+        buffer.push_back(0x0F);
+        buffer.push_back(0x85);
         auto arg = offset.get_bytes();
         buffer.insert(buffer.end(), arg.begin(), arg.end());
     }
@@ -284,6 +326,17 @@ struct Compiler {
     void compile_read(ReadInsn insn, Emitter &emitter) {
         // TODO: Implement this.
     }
+    void compile_loop(int offset, Emitter &emitter) {
+        emitter.mov_deref(Register8::AL, Register64::RCX);
+        emitter.cmp_al(Imm8(0));
+        emitter.jz(Imm32(offset));
+    }
+    void compile_end_loop(int offset, Emitter &emitter) {
+        emitter.mov_deref(Register8::AL, Register64::RCX);
+        emitter.cmp_al(Imm8(0));
+        offset += emitter.length() + 2;
+        emitter.jnz(Imm32(-offset));
+    }
 };
 
 }; // namespace JIT
@@ -293,6 +346,7 @@ struct Compiler {
 
     Program compile_program(std::string code) {
         Program program;
+        program.append_new_block();
         for (int i = 0; i < code.length(); i++) {
             if (is_add_or_sub(code, i)) {
                 int total = 0;
@@ -312,9 +366,9 @@ struct Compiler {
                     continue;
                 }
                 if (total > 0) {
-                    program.append(AddInsn(total));
+                    program.append_insn(AddInsn(total));
                 } else {
-                    program.append(SubInsn(-total));
+                    program.append_insn(SubInsn(-total));
                 }
                 continue;
             }
@@ -336,33 +390,78 @@ struct Compiler {
                     continue;
                 }
                 if (total > 0) {
-                    program.append(RightInsn(total));
+                    program.append_insn(RightInsn(total));
                 } else {
-                    program.append(LeftInsn(-total));
+                    program.append_insn(LeftInsn(-total));
                 }
                 continue;
             }
             if (code[i] == '.') {
-                program.append(WriteInsn());
+                program.append_insn(WriteInsn());
                 continue;
             }
             if (code[i] == ',') {
-                program.append(ReadInsn());
+                program.append_insn(ReadInsn());
                 continue;
             }
             if (code[i] == '[') {
-                program.append(LoopInsn());
+                program.append_new_block();
+                program.append_insn(LoopInsn());
+                program.append_new_block();
                 continue;
             }
             if (code[i] == ']') {
-                program.append(EndLoopInsn());
+                program.append_new_block();
+                program.append_insn(EndLoopInsn());
+                program.append_new_block();
                 continue;
             }
         }
+        validate_loops(program);
+        patch_loops(program);
         return program;
     }
 
   private:
+    void validate_loops(Program &program) {
+        int loop_depth = 0;
+        for (auto &block : program.blocks) {
+            for (auto &insn : block->instructions) {
+                if (insn->type == Instruction::Type::Loop) {
+                    loop_depth++;
+                } else if (insn->type == Instruction::Type::EndLoop) {
+                    loop_depth--;
+                    if (loop_depth < 0) {
+                        std::cerr << "Invalid input program: Unmatched ']'\n";
+                        exit(1);
+                    }
+                }
+            }
+        }
+        if (loop_depth > 0) {
+            std::cerr << "Invalid input program: Unmatched '['\n";
+            exit(1);
+        }
+    }
+    void patch_loops(Program &program) {
+        std::stack<int> loop_positions;
+        int idx = 0;
+
+        for (auto &block : program.blocks) {
+            auto &insn = block->instructions.front();
+            if (insn->type == Instruction::Type::Loop) {
+                loop_positions.push(idx);
+            } else if (insn->type == Instruction::Type::EndLoop) {
+                int pos = loop_positions.top();
+                auto &matching_insn = program.blocks[pos]->instructions.front();
+                static_cast<EndLoopInsn *>(insn.get())->destination = pos;
+                static_cast<LoopInsn *>(matching_insn.get())->destination = idx;
+                loop_positions.pop();
+            }
+
+            idx++;
+        }
+    }
     bool is_add_or_sub(std::string &code, int pos) {
         return pos < code.length() && (code[pos] == '-' || code[pos] == '+');
     }
@@ -377,21 +476,76 @@ struct JitCompiler {
 
     FnPointer compile(Program &program) {
         setup();
-        for (int i = 0; i < program.instructions.size(); i++) {
-            process_instruction(program.instructions[i].get());
-        }
+        generate_emitters(program);
+        emit_jumps(program);
         cleanup();
         std::vector<char> fn_code;
         for (auto &emitter : emitters) {
             std::vector<char> data = emitter.get();
             fn_code.insert(fn_code.end(), data.begin(), data.end());
         }
+
+        for (char c : fn_code) {
+            printf("%02x ", c & 0xff);
+        }
+        puts("");
+
         void *fn_memory = allocate_function(fn_code.size() + 1);
         memcpy(fn_memory, fn_code.data(), fn_code.size());
         return (FnPointer)fn_memory;
     }
 
   private:
+    void generate_emitters(Program &program) {
+        for (auto &block : program.blocks) {
+            emitters.push_back(JIT::Emitter());
+            for (auto &insn : block->instructions) {
+                process_instruction(insn.get());
+            }
+        }
+    }
+
+    void emit_jumps(Program &program) {
+        for (int i = 0; i < program.blocks.size(); i++) {
+            if (program.blocks[i]->instructions.empty()) {
+                continue;
+            }
+            auto &insn = program.blocks[i]->instructions.front();
+            if (insn->type == Instruction::Type::Loop) {
+                emit_jumps(program, i);
+                i = static_cast<LoopInsn *>(insn.get())->destination;
+            }
+        }
+    }
+    int emit_jumps(Program &program, int position) {
+        int length = 0;
+        for (int i = position + 1; i < program.blocks.size(); i++) {
+            if (program.blocks[i]->instructions.empty()) {
+                continue;
+            }
+            auto &insn = program.blocks[i]->instructions.front();
+            if (insn->type == Instruction::Type::Loop) {
+                int destination = emit_jumps(program, i);
+                for (int j = i; j <= destination; j++) {
+                    if (emitters[j + 1].length() == 0) {
+                        std::cerr << "Weird\n";
+                    }
+                    length += emitters[j + 1].length();
+                }
+                i = destination;
+            } else if (insn->type == Instruction::Type::EndLoop) {
+                insn_compiler.compile_loop(length, emitters[position + 1]);
+                length += emitters[position + 1].length();
+                insn_compiler.compile_end_loop(length, emitters[i + 1]);
+                return i;
+            } else {
+                length += emitters[i + 1].length();
+            }
+        }
+        std::cerr << "I don't know what to do here\n";
+        exit(0);
+    }
+
     void *allocate_function(std::size_t size) {
         void *fn_memory = mmap(0, size, PROT_READ | PROT_WRITE | PROT_EXEC,
                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -448,11 +602,6 @@ struct JitCompiler {
         }
     }
     std::vector<JIT::Emitter> emitters;
-    struct JumpPosition {
-        int emiter_position;
-        int bytecode_offset();
-    };
-    std::stack<int> loop_positions;
     JIT::Compiler insn_compiler;
 };
 
@@ -460,6 +609,7 @@ struct Interpreter {
     int run_program(std::string &&code) {
         this->code = code;
         Program program = compiler.compile_program(code);
+        /* program.print(); */
         FnPointer fn = jit_compiler.compile(program);
         vm_buffer = new char[50000];
         int result = fn(vm_buffer);
@@ -479,6 +629,7 @@ int main() {
     memset(buffer, 0, sizeof(buffer));
     Interpreter interpreter;
     interpreter.run_program(
-        "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.");
+        "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++."
+        ">>.<-.<.+++.------.--------.>>+.>++.");
     return 0;
 }

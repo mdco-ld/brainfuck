@@ -14,6 +14,8 @@ struct Instruction {
         Left,
         Loop,
         EndLoop,
+        Write,
+        Read,
     };
     Type type;
 };
@@ -40,6 +42,14 @@ struct LoopInsn : public Instruction {
 
 struct EndLoopInsn : public Instruction {
     EndLoopInsn() { type = Type::EndLoop; }
+};
+
+struct WriteInsn : public Instruction {
+    WriteInsn() { type = Type::Write; }
+};
+
+struct ReadInsn : public Instruction {
+    ReadInsn() { type = Type::Read; }
 };
 
 struct VM {
@@ -139,7 +149,7 @@ struct Emitter {
         auto imm = src.get_bytes();
         buffer.insert(buffer.end(), imm.begin(), imm.end());
     }
-    void movabs(Register64 dst, Imm64 src) {
+    void mov(Register64 dst, Imm64 src) {
         buffer.push_back(0x48);
         buffer.push_back(0xB8 | (int)dst);
         auto imm = src.get_bytes();
@@ -201,6 +211,11 @@ struct Emitter {
         buffer.insert(buffer.end(), arg.begin(), arg.end());
     }
 
+    void syscall() {
+        buffer.push_back(0x0F);
+        buffer.push_back(0x05);
+    }
+
     std::vector<char> get() { return buffer; }
 
   private:
@@ -225,6 +240,13 @@ struct Compiler {
     void compile_left(LeftInsn insn, Emitter &emitter) {
         emitter.sub(Register32::ECX, Imm32(1));
     }
+    void compile_write(WriteInsn insn, Emitter &emitter) {
+        emitter.mov(Register64::RAX, Imm64(1));
+        emitter.mov(Register64::RDI, Imm64(1));
+        emitter.mov(Register64::RSI, Register64::RCX);
+        emitter.mov(Register64::RDX, Imm64(1));
+        emitter.syscall();
+    }
 };
 
 }; // namespace JIT
@@ -237,12 +259,14 @@ void *allocate_function(std::size_t size) {
 
 void write_function(void *fn_memory) {
     JIT::Emitter emitter;
-    emitter.mov(JIT::Register32::EAX, JIT::Imm32(5));
-    emitter.cmp(JIT::Register32::EAX, JIT::Imm32(3));
-    emitter.jz(JIT::Imm32(6));
-    emitter.mov(JIT::Register32::EAX, JIT::Imm32(69));
-    emitter.ret();
-    emitter.mov(JIT::Register32::EAX, JIT::Imm32(420));
+    emitter.mov(JIT::Register32::EAX, JIT::Imm32(0x45));
+    emitter.mov(JIT::Register64::RSI, JIT::Register64::RDI);
+    emitter.deref_mov(JIT::Register64::RSI, JIT::Register8::AL);
+    emitter.mov(JIT::Register64::RAX, JIT::Imm64(1));
+    emitter.mov(JIT::Register64::RDI, JIT::Imm64(1));
+    emitter.mov(JIT::Register64::RDX, JIT::Imm64(1));
+    emitter.syscall();
+    emitter.mov(JIT::Register64::RAX, JIT::Imm64(0));
     emitter.ret();
     std::vector<char> code = emitter.get();
     for (auto c : code) {
@@ -252,7 +276,7 @@ void write_function(void *fn_memory) {
     memcpy(fn_memory, code.data(), code.size());
 }
 
-typedef unsigned long long (*FnPointer)();
+typedef unsigned long long (*FnPointer)(char *);
 
 FnPointer build_function() {
     void *fn = allocate_function(256);
@@ -261,8 +285,9 @@ FnPointer build_function() {
 }
 
 int main() {
+    char buffer[1000];
     FnPointer fn = build_function();
-    int x = fn();
+    int x = fn(buffer);
     printf("%d\n", x);
     return 0;
 }

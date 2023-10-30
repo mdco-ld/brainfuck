@@ -1,11 +1,14 @@
 #include <cstdio>
 #include <iostream>
 #include <memory>
+#include <stack>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
 #include <sys/mman.h>
 #include <vector>
+
+typedef unsigned long long (*FnPointer)(char *);
 
 struct Instruction {
     enum class Type {
@@ -43,10 +46,12 @@ struct LeftInsn : public Instruction {
 
 struct LoopInsn : public Instruction {
     LoopInsn() { type = Type::Loop; }
+    int offset{0};
 };
 
 struct EndLoopInsn : public Instruction {
     EndLoopInsn() { type = Type::EndLoop; }
+    int offset{0};
 };
 
 struct WriteInsn : public Instruction {
@@ -233,6 +238,10 @@ struct Emitter {
     }
 
     std::vector<char> get() { return buffer; }
+    /**
+     * Returns the length of the instructions already emitted
+     */
+    std::size_t length() { return buffer.size(); }
 
   private:
     std::vector<char> buffer;
@@ -360,52 +369,118 @@ struct Compiler {
     bool is_shift(std::string &code, int pos) {
         return pos < code.length() && (code[pos] == '<' || code[pos] == '>');
     }
-    std::vector<JIT::Emitter> emitters;
 };
 
-void *allocate_function(std::size_t size) {
-    void *fn_memory = mmap(0, size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    return fn_memory;
-}
+struct JitCompiler {
 
-void write_function(void *fn_memory) {
-    JIT::Compiler compiler;
-    JIT::Emitter emitter;
+    JitCompiler() {}
 
-    compiler.compile_setup(emitter);
-
-    compiler.compile_add(AddInsn(0x41), emitter);
-    compiler.compile_write(WriteInsn(), emitter);
-    compiler.compile_right(RightInsn(1), emitter);
-    compiler.compile_add(AddInsn(10), emitter);
-    compiler.compile_write(WriteInsn(), emitter);
-
-    compiler.compile_cleanup(emitter);
-
-    std::vector<char> code = emitter.get();
-#if defined(DEBUG_INTRUCTIONS)
-    for (auto c : code) {
-        printf("%02x ", c & 0xff);
+    FnPointer compile(Program &program) {
+        setup();
+        for (int i = 0; i < program.instructions.size(); i++) {
+            process_instruction(program.instructions[i].get());
+        }
+        cleanup();
+        std::vector<char> fn_code;
+        for (auto &emitter : emitters) {
+            fn_code.insert(fn_code.end(), emitter.get().begin(),
+                           emitter.get().end());
+        }
+        void *fn_memory = allocate_function(fn_code.size() + 1);
+        memcpy(fn_memory, fn_code.data(), fn_code.size());
+        return (FnPointer)fn_memory;
     }
-    puts("");
-#endif
-    memcpy(fn_memory, code.data(), code.size());
-}
 
-typedef unsigned long long (*FnPointer)(char *);
+  private:
+    void *allocate_function(std::size_t size) {
+        void *fn_memory = mmap(0, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        return fn_memory;
+    }
+    void setup() {
+        JIT::Emitter emitter;
+        insn_compiler.compile_setup(emitter);
+        emitters.push_back(emitter);
+    }
+    void cleanup() {
+        JIT::Emitter emitter;
+        insn_compiler.compile_cleanup(emitter);
+        emitters.push_back(emitter);
+    }
+    void process_instruction(Instruction *insn) {
+        switch (insn->type) {
+        case Instruction::Type::Add: {
+            std::cout << "Add Instruction\n";
+            insn_compiler.compile_add(*static_cast<AddInsn *>(insn),
+                                      emitters.back());
+            break;
+        }
+        case Instruction::Type::Sub: {
+            insn_compiler.compile_sub(*static_cast<SubInsn *>(insn),
+                                      emitters.back());
+            break;
+        }
+        case Instruction::Type::Right: {
+            insn_compiler.compile_right(*static_cast<RightInsn *>(insn),
+                                        emitters.back());
+            break;
+        }
+        case Instruction::Type::Left: {
+            insn_compiler.compile_left(*static_cast<LeftInsn *>(insn),
+                                       emitters.back());
+            break;
+        }
+        case Instruction::Type::Read: {
+            insn_compiler.compile_read(*static_cast<ReadInsn *>(insn),
+                                       emitters.back());
+            break;
+        }
+        case Instruction::Type::Write: {
+            std::cout << "Write Instruction\n";
+            insn_compiler.compile_write(*static_cast<WriteInsn *>(insn),
+                                        emitters.back());
+            break;
+        }
+        case Instruction::Type::Loop: {
+            break;
+        }
+        case Instruction::Type::EndLoop: {
+            break;
+        }
+        }
+    }
+    std::vector<JIT::Emitter> emitters;
+    struct JumpPosition {
+        int emiter_position;
+        int bytecode_offset();
+    };
+    std::stack<int> loop_positions;
+    JIT::Compiler insn_compiler;
+};
 
-FnPointer build_function() {
-    void *fn = allocate_function(256);
-    write_function(fn);
-    return (FnPointer)fn;
-}
+struct Interpreter {
+    int run_program(std::string &&code) {
+        this->code = code;
+        Program program = compiler.compile_program(code);
+        FnPointer fn = jit_compiler.compile(program);
+        vm_buffer = new char[50000];
+        int result = fn(vm_buffer);
+        delete vm_buffer;
+        return result;
+    }
+
+  private:
+    char *vm_buffer;
+    std::string code;
+    JitCompiler jit_compiler;
+    Compiler compiler;
+};
 
 int main() {
     char buffer[1000];
     memset(buffer, 0, sizeof(buffer));
-    FnPointer fn = build_function();
-    int x = fn(buffer);
-    printf("%d\n", x);
+    Interpreter interpreter;
+    interpreter.run_program(
+        "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.");
     return 0;
 }

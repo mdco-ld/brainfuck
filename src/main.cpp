@@ -21,11 +21,13 @@ struct Instruction {
 };
 
 struct AddInsn : public Instruction {
-    AddInsn() { type = Type::Add; }
+    AddInsn(int val) : value(val) { type = Type::Add; }
+    int value{0};
 };
 
 struct SubInsn : public Instruction {
-    SubInsn() { type = Type::Sub; }
+    SubInsn(int val) : value(val) { type = Type::Sub; }
+    int value{0};
 };
 
 struct RightInsn : public Instruction {
@@ -158,7 +160,7 @@ struct Emitter {
     void mov(Register64 dst, Register64 src) {
         buffer.push_back(0x48);
         buffer.push_back(0x89);
-        buffer.push_back(0xc0 | ((int)dst) << 3 | (int)src);
+        buffer.push_back(0xc0 | ((int)src) << 3 | (int)dst);
     }
     /**
      * mov dst, [src]
@@ -175,7 +177,8 @@ struct Emitter {
         buffer.push_back(((int)src << 3) | (int)dst);
     }
     void add(Register32 dst, Imm32 src) {
-        buffer.push_back(0x05);
+        buffer.push_back(0x81);
+        buffer.push_back(0xC0 | (int)dst);
         auto imm = src.get_bytes();
         buffer.insert(buffer.end(), imm.begin(), imm.end());
     }
@@ -183,7 +186,21 @@ struct Emitter {
         buffer.push_back(0x01);
         buffer.push_back(0xC0 | ((int)src) << 3 | (int)dst);
     }
+    void add(Register64 dst, Imm32 src) {
+        buffer.push_back(0x48);
+        buffer.push_back(0x81);
+        buffer.push_back(0xC0 | (int)dst);
+        auto imm = src.get_bytes();
+        buffer.insert(buffer.end(), imm.begin(), imm.end());
+    }
     void sub(Register32 dst, Imm32 src) {
+        buffer.push_back(0x81);
+        buffer.push_back(0xE8 | (int)dst);
+        auto imm = src.get_bytes();
+        buffer.insert(buffer.end(), imm.begin(), imm.end());
+    }
+    void sub(Register64 dst, Imm32 src) {
+        buffer.push_back(0x48);
         buffer.push_back(0x81);
         buffer.push_back(0xE8 | (int)dst);
         auto imm = src.get_bytes();
@@ -191,6 +208,11 @@ struct Emitter {
     }
     void al_add(Imm8 src) {
         buffer.push_back(0x04);
+        auto arg = src.get_bytes();
+        buffer.insert(buffer.end(), arg.begin(), arg.end());
+    }
+    void al_sub(Imm8 src) {
+        buffer.push_back(0x2C);
         auto arg = src.get_bytes();
         buffer.insert(buffer.end(), arg.begin(), arg.end());
     }
@@ -224,28 +246,37 @@ struct Emitter {
 
 struct Compiler {
     Compiler() {}
+    void compile_setup(Emitter &emitter) {
+        emitter.mov(Register64::RCX, Register64::RDI);
+    }
+    void compile_cleanup(Emitter &emitter) {
+        emitter.mov(Register64::RAX, Imm64(0));
+        emitter.ret();
+    }
     void compile_add(AddInsn insn, Emitter &emitter) {
         emitter.mov_deref(Register8::AL, Register64::RCX);
-        emitter.al_add(Imm8(1));
+        emitter.al_add(Imm8(insn.value));
         emitter.deref_mov(Register64::RCX, Register8::AL);
     }
     void compile_sub(SubInsn insn, Emitter &emitter) {
         emitter.mov_deref(Register8::AL, Register64::RCX);
-        emitter.al_add(Imm8(-1));
+        emitter.al_sub(Imm8(insn.value));
         emitter.deref_mov(Register64::RCX, Register8::AL);
     }
     void compile_right(RightInsn insn, Emitter &emitter) {
-        emitter.add(Register32::ECX, Imm32(1));
+        emitter.add(Register64::RCX, Imm32(1));
     }
     void compile_left(LeftInsn insn, Emitter &emitter) {
-        emitter.sub(Register32::ECX, Imm32(1));
+        emitter.sub(Register64::RCX, Imm32(1));
     }
     void compile_write(WriteInsn insn, Emitter &emitter) {
         emitter.mov(Register64::RAX, Imm64(1));
         emitter.mov(Register64::RDI, Imm64(1));
         emitter.mov(Register64::RSI, Register64::RCX);
         emitter.mov(Register64::RDX, Imm64(1));
+        emitter.mov(Register64::RBX, Register64::RCX);
         emitter.syscall();
+        emitter.mov(Register64::RCX, Register64::RBX);
     }
 };
 
@@ -258,16 +289,19 @@ void *allocate_function(std::size_t size) {
 }
 
 void write_function(void *fn_memory) {
+    JIT::Compiler compiler;
     JIT::Emitter emitter;
-    emitter.mov(JIT::Register32::EAX, JIT::Imm32(0x45));
-    emitter.mov(JIT::Register64::RSI, JIT::Register64::RDI);
-    emitter.deref_mov(JIT::Register64::RSI, JIT::Register8::AL);
-    emitter.mov(JIT::Register64::RAX, JIT::Imm64(1));
-    emitter.mov(JIT::Register64::RDI, JIT::Imm64(1));
-    emitter.mov(JIT::Register64::RDX, JIT::Imm64(1));
-    emitter.syscall();
-    emitter.mov(JIT::Register64::RAX, JIT::Imm64(0));
-    emitter.ret();
+
+    compiler.compile_setup(emitter);
+
+    compiler.compile_add(AddInsn(0x41), emitter);
+    compiler.compile_write(WriteInsn(), emitter);
+    compiler.compile_right(RightInsn(), emitter);
+    compiler.compile_add(AddInsn(10), emitter);
+    compiler.compile_write(WriteInsn(), emitter);
+
+    compiler.compile_cleanup(emitter);
+
     std::vector<char> code = emitter.get();
     for (auto c : code) {
         printf("%02x ", c & 0xff);
@@ -286,6 +320,7 @@ FnPointer build_function() {
 
 int main() {
     char buffer[1000];
+    memset(buffer, 0, sizeof(buffer));
     FnPointer fn = build_function();
     int x = fn(buffer);
     printf("%d\n", x);

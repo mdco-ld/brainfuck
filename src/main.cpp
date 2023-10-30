@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stack>
@@ -51,14 +52,12 @@ struct LeftInsn : public Instruction {
 
 struct LoopInsn : public Instruction {
     LoopInsn() { type = Type::Loop; }
-    int destination{0};
-    void print() override { std::cerr << "Loop(" << destination << ")\n"; }
+    void print() override { std::cerr << "Loop\n"; }
 };
 
 struct EndLoopInsn : public Instruction {
     EndLoopInsn() { type = Type::EndLoop; }
-    int destination{0};
-    void print() override { std::cerr << "EndLoop(" << destination << ")\n"; }
+    void print() override { std::cerr << "EndLoop\n"; }
 };
 
 struct WriteInsn : public Instruction {
@@ -325,6 +324,8 @@ struct Compiler {
     }
     void compile_read(ReadInsn insn, Emitter &emitter) {
         // TODO: Implement this.
+        std::cerr << "Read is not implemented yet :(\n";
+        exit(0);
     }
     void compile_loop(int offset, Emitter &emitter) {
         emitter.mov_deref(Register8::AL, Register64::RCX);
@@ -418,7 +419,6 @@ struct Compiler {
             }
         }
         validate_loops(program);
-        patch_loops(program);
         return program;
     }
 
@@ -441,25 +441,6 @@ struct Compiler {
         if (loop_depth > 0) {
             std::cerr << "Invalid input program: Unmatched '['\n";
             exit(1);
-        }
-    }
-    void patch_loops(Program &program) {
-        std::stack<int> loop_positions;
-        int idx = 0;
-
-        for (auto &block : program.blocks) {
-            auto &insn = block->instructions.front();
-            if (insn->type == Instruction::Type::Loop) {
-                loop_positions.push(idx);
-            } else if (insn->type == Instruction::Type::EndLoop) {
-                int pos = loop_positions.top();
-                auto &matching_insn = program.blocks[pos]->instructions.front();
-                static_cast<EndLoopInsn *>(insn.get())->destination = pos;
-                static_cast<LoopInsn *>(matching_insn.get())->destination = idx;
-                loop_positions.pop();
-            }
-
-            idx++;
         }
     }
     bool is_add_or_sub(std::string &code, int pos) {
@@ -485,11 +466,6 @@ struct JitCompiler {
             fn_code.insert(fn_code.end(), data.begin(), data.end());
         }
 
-        /* for (char c : fn_code) { */
-        /*     printf("%02x ", c & 0xff); */
-        /* } */
-        /* puts(""); */
-
         void *fn_memory = allocate_function(fn_code.size() + 1);
         memcpy(fn_memory, fn_code.data(), fn_code.size());
         return (FnPointer)fn_memory;
@@ -512,8 +488,7 @@ struct JitCompiler {
             }
             auto &insn = program.blocks[i]->instructions.front();
             if (insn->type == Instruction::Type::Loop) {
-                emit_jumps(program, i);
-                i = static_cast<LoopInsn *>(insn.get())->destination;
+                i = emit_jumps(program, i);
             }
         }
     }
@@ -527,9 +502,6 @@ struct JitCompiler {
             if (insn->type == Instruction::Type::Loop) {
                 int destination = emit_jumps(program, i);
                 for (int j = i; j <= destination; j++) {
-                    if (emitters[j + 1].length() == 0) {
-                        std::cerr << "Weird\n";
-                    }
                     length += emitters[j + 1].length();
                 }
                 i = destination;
@@ -625,12 +597,68 @@ struct Interpreter {
     Compiler compiler;
 };
 
-int main() {
-    char buffer[1000];
-    memset(buffer, 0, sizeof(buffer));
+std::string read_file(const std::string &filePath) {
+    std::ifstream file(filePath); // Open the file stream
+
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open the file: " << filePath
+                  << std::endl;
+        return ""; // Return an empty string to indicate failure
+    }
+
+    std::string content; // String to hold the file content
+    std::string line;    // String to read each line from the file
+
+    // Read the file line by line and append it to the content string
+    while (std::getline(file, line)) {
+        content += line + "\n";
+    }
+
+    file.close(); // Close the file stream
+
+    return content;
+}
+
+std::string process_input(std::string &input) {
+    std::string result;
+    for (char c : input) {
+        if (c == '+') {
+            result += c;
+        }
+        if (c == '-') {
+            result += c;
+        }
+        if (c == '>') {
+            result += c;
+        }
+        if (c == '<') {
+            result += c;
+        }
+        if (c == '[') {
+            result += c;
+        }
+        if (c == ']') {
+            result += c;
+        }
+        if (c == '.') {
+            result += c;
+        }
+        if (c == ',') {
+            result += c;
+        }
+    }
+    return result;
+}
+
+int main(int argc, const char *argv[]) {
+    if (argc < 2) {
+        std::cout << "Usage: " << argv[0] << " <filename>\n";
+        return 1;
+    }
+    std::string filename = argv[1];
+    std::string input = read_file(filename);
+    input = process_input(input);
     Interpreter interpreter;
-    interpreter.run_program(
-        "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++."
-        ">>.<-.<.+++.------.--------.>>+.>++.");
+    interpreter.run_program(input.c_str());
     return 0;
 }

@@ -61,21 +61,41 @@ struct Program {
 namespace JIT {
 
 enum class Register8 {
-    AX = 0b000,
-    BX = 0b011,
-    CX = 0b001,
+    AL = 0b000,
+    BL = 0b011,
+    CL = 0b001,
 };
 
 enum class Register32 {
     EAX = 0b000,
     EBX = 0b011,
     ECX = 0b001,
+    EDX = 0b010,
+    ESI = 0b110,
+    EDI = 0b111,
 };
 
 enum class Register64 {
     RAX = 0b000,
     RBX = 0b011,
     RCX = 0b001,
+    RDX = 0b010,
+    RSI = 0b110,
+    RDI = 0b111,
+};
+
+struct Imm8 {
+    static const size_t length = 1;
+    unsigned char value{0};
+    explicit Imm8(unsigned char val) : value(val) {
+        bytes.resize(length);
+        bytes[0] = val;
+    }
+
+    const std::vector<char> &get_bytes() { return bytes; }
+
+  private:
+    std::vector<char> bytes;
 };
 
 struct Imm32 {
@@ -125,6 +145,25 @@ struct Emitter {
         auto imm = src.get_bytes();
         buffer.insert(buffer.end(), imm.begin(), imm.end());
     }
+    void mov(Register64 dst, Register64 src) {
+        buffer.push_back(0x48);
+        buffer.push_back(0x89);
+        buffer.push_back(0xc0 | ((int)dst) << 3 | (int)src);
+    }
+    /**
+     * mov dst, [src]
+     */
+    void mov_deref(Register8 dst, Register64 src) {
+        buffer.push_back(0x8A);
+        buffer.push_back(((int)dst) << 3 | (int)src);
+    }
+    /**
+     * mov [dst], src
+     */
+    void deref_mov(Register64 dst, Register8 src) {
+        buffer.push_back(0x88);
+        buffer.push_back(((int)src << 3) | (int)dst);
+    }
     void add(Register32 dst, Imm32 src) {
         buffer.push_back(0x05);
         auto imm = src.get_bytes();
@@ -133,6 +172,17 @@ struct Emitter {
     void add(Register32 dst, Register32 src) {
         buffer.push_back(0x01);
         buffer.push_back(0xC0 | ((int)src) << 3 | (int)dst);
+    }
+    void sub(Register32 dst, Imm32 src) {
+        buffer.push_back(0x81);
+        buffer.push_back(0xE8 | (int)dst);
+        auto imm = src.get_bytes();
+        buffer.insert(buffer.end(), imm.begin(), imm.end());
+    }
+    void al_add(Imm8 src) {
+        buffer.push_back(0x04);
+        auto arg = src.get_bytes();
+        buffer.insert(buffer.end(), arg.begin(), arg.end());
     }
     void cmp(Register32 dst, Imm32 src) {
         buffer.push_back(0x3D);
@@ -151,13 +201,31 @@ struct Emitter {
         buffer.insert(buffer.end(), arg.begin(), arg.end());
     }
 
-    const std::vector<char> &get() { return buffer; }
+    std::vector<char> get() { return buffer; }
 
   private:
     std::vector<char> buffer;
 };
 
-struct JIT {};
+struct Compiler {
+    Compiler() {}
+    void compile_add(AddInsn insn, Emitter &emitter) {
+        emitter.mov_deref(Register8::AL, Register64::RCX);
+        emitter.al_add(Imm8(1));
+        emitter.deref_mov(Register64::RCX, Register8::AL);
+    }
+    void compile_sub(SubInsn insn, Emitter &emitter) {
+        emitter.mov_deref(Register8::AL, Register64::RCX);
+        emitter.al_add(Imm8(-1));
+        emitter.deref_mov(Register64::RCX, Register8::AL);
+    }
+    void compile_right(RightInsn insn, Emitter &emitter) {
+        emitter.add(Register32::ECX, Imm32(1));
+    }
+    void compile_left(LeftInsn insn, Emitter &emitter) {
+        emitter.sub(Register32::ECX, Imm32(1));
+    }
+};
 
 }; // namespace JIT
 

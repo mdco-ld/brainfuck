@@ -383,8 +383,8 @@ struct JitCompiler {
         cleanup();
         std::vector<char> fn_code;
         for (auto &emitter : emitters) {
-            fn_code.insert(fn_code.end(), emitter.get().begin(),
-                           emitter.get().end());
+            std::vector<char> data = emitter.get();
+            fn_code.insert(fn_code.end(), data.begin(), data.end());
         }
         void *fn_memory = allocate_function(fn_code.size() + 1);
         memcpy(fn_memory, fn_code.data(), fn_code.size());
@@ -410,7 +410,6 @@ struct JitCompiler {
     void process_instruction(Instruction *insn) {
         switch (insn->type) {
         case Instruction::Type::Add: {
-            std::cout << "Add Instruction\n";
             insn_compiler.compile_add(*static_cast<AddInsn *>(insn),
                                       emitters.back());
             break;
@@ -436,7 +435,6 @@ struct JitCompiler {
             break;
         }
         case Instruction::Type::Write: {
-            std::cout << "Write Instruction\n";
             insn_compiler.compile_write(*static_cast<WriteInsn *>(insn),
                                         emitters.back());
             break;

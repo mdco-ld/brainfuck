@@ -485,10 +485,10 @@ struct JitCompiler {
             fn_code.insert(fn_code.end(), data.begin(), data.end());
         }
 
-        for (char c : fn_code) {
-            printf("%02x ", c & 0xff);
-        }
-        puts("");
+        /* for (char c : fn_code) { */
+        /*     printf("%02x ", c & 0xff); */
+        /* } */
+        /* puts(""); */
 
         void *fn_memory = allocate_function(fn_code.size() + 1);
         memcpy(fn_memory, fn_code.data(), fn_code.size());
@@ -612,6 +612,7 @@ struct Interpreter {
         /* program.print(); */
         FnPointer fn = jit_compiler.compile(program);
         vm_buffer = new char[50000];
+        memset(vm_buffer, 0, sizeof(char[50000]));
         int result = fn(vm_buffer);
         delete vm_buffer;
         return result;
